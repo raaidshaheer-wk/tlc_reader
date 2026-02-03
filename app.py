@@ -184,13 +184,5 @@ if trip_id_input:
         except Exception as e:
             st.warning(f"Could not fetch route from OSRM: {e}")
 
-        # --- Driver path from events ---
-        driver_coords = []
-        for e in driver_events:
-            loc = safe_get(e, "body", "location")
-            if loc and isinstance(loc, dict) and "lat" in loc and "lng" in loc:
-                driver_coords.append([loc["lat"], loc["lng"]])
-        if driver_coords:
-            folium.PolyLine(driver_coords, color="red", weight=3, opacity=0.8, tooltip="Driver Path").add_to(m)
 
         st_folium(m, width=800, height=500)
