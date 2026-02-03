@@ -1,9 +1,9 @@
 import streamlit as st
-import requests
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
 from datetime import datetime
+import json
 
 st.set_page_config(page_title="Trip Dashboard", layout="wide")
 st.title("PickMe Trip Dashboard")
@@ -32,14 +32,10 @@ def format_timestamp(ts):
         return ts
 
 # --- User Input ---
-trip_id_input = st.text_input("Enter Trip ID", "")
-if trip_id_input:
-    url = f"https://tlc-event-reader.pickme.lk/triplifecycle?trip_id={trip_id_input}"
-    response = requests.get(url)
-    if response.status_code != 200:
-        st.error("Failed to fetch trip data. Check Trip ID.")
-    else:
-        data = response.json()
+uploaded_file = st.file_uploader("Upload Trip JSON File", type="json")
+if uploaded_file:
+    try:
+        data = json.load(uploaded_file)
 
         # --- Separate events by type ---
         trip_created_event = next((e for e in data if e["type"] == "trip_created"), None)
@@ -157,8 +153,6 @@ if trip_id_input:
 
         # --- Map ---
         st.header("Trip Map")
-
-        # Initialize map centered at pickup
         m = folium.Map(location=[pickup.get("lat", 0), pickup.get("lng", 0)], zoom_start=12)
 
         # Pickup & Drop markers
@@ -173,10 +167,9 @@ if trip_id_input:
             icon=folium.Icon(color='red')
         ).add_to(m)
 
-        # --- OSRM Route between Pickup & Drop ---
+        # --- OSRM Route ---
         try:
             import requests
-
             osrm_url = f"http://router.project-osrm.org/route/v1/driving/{pickup.get('lng')},{pickup.get('lat')};{drop.get('lng')},{drop.get('lat')}?overview=full&geometries=geojson"
             r = requests.get(osrm_url).json()
             route_coords = [(c[1], c[0]) for c in r["routes"][0]["geometry"]["coordinates"]]
@@ -184,5 +177,7 @@ if trip_id_input:
         except Exception as e:
             st.warning(f"Could not fetch route from OSRM: {e}")
 
-
         st_folium(m, width=800, height=500)
+
+    except Exception as e:
+        st.error(f"Failed to read JSON file: {e}")
