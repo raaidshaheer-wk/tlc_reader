@@ -4,6 +4,7 @@ import folium
 from streamlit_folium import st_folium
 from datetime import datetime
 import json
+import requests
 
 st.set_page_config(page_title="Trip Dashboard", layout="wide")
 st.title("PickMe Trip Dashboard")
@@ -35,19 +36,18 @@ def format_timestamp(ts):
 uploaded_file = st.file_uploader("Upload Trip JSON File", type="json")
 if uploaded_file:
     try:
-        data = json.load(uploaded_file)
+        events = json.load(uploaded_file)
 
         # --- Separate events by type ---
-        trip_created_event = next((e for e in data if e["type"] == "trip_created"), None)
-        trip_fare_event = next((e for e in data if e["type"] == "trip_fare_updated"), None)
-        trip_completed_event = next((e for e in data if e["type"] == "trip_completed"), None)
-        trip_ended_event = next((e for e in data if e["type"] == "trip_ended"), None)
+        trip_created_event = next((e for e in events if e["type"] == "trip_created"), None)
+        trip_fare_event = next((e for e in events if e["type"] == "trip_fare_updated"), None)
+        trip_completed_event = next((e for e in events if e["type"] == "trip_completed"), None)
+        trip_ended_event = next((e for e in events if e["type"] == "trip_ended"), None)
 
         # --- Passenger & Trip Info ---
         st.header("Passenger & Trip Info")
         if trip_created_event:
             body = trip_created_event["body"]
-
             pickups = safe_get(body, "pickup", "location", default=[])
             drops = safe_get(body, "drop", "location", default=[])
 
@@ -60,255 +60,133 @@ if uploaded_file:
                 "Number of Pickups": len(pickups),
                 "Number of Drops": len(drops),
             }
-
             st.json(passenger_info)
 
             if pickups:
                 st.subheader("Pickup Locations")
-                st.dataframe(pd.DataFrame(pickups))
+                df_pickups = pd.DataFrame(pickups)
+                st.dataframe(df_pickups.astype(str))  # Convert all to string
 
             if drops:
                 st.subheader("Drop Locations (Stops)")
-                st.dataframe(pd.DataFrame(drops))
+                df_drops = pd.DataFrame(drops)
+                st.dataframe(df_drops.astype(str))  # Convert all to string
 
-            # Keep first pickup & last drop for backward compatibility
+            # Keep first pickup & last drop
             pickup = pickups[0] if pickups else {}
             drop = drops[-1] if drops else {}
 
         # --- Ride & Trip Overview ---
         st.header("Ride & Trip Overview")
         ride_trip_rows = []
-
-        for e in data:
+        for e in events:
             trip_id = safe_get(e, "body", "trip_id")
             if trip_id is not None:
                 driver_id = safe_get(e, "body", "driver_id")
                 ride_id = None
-                # Sometimes ride_id is in business_metadata
                 business_metadata = safe_get(e, "body", "business_metadata", default=[])
                 for meta in business_metadata:
                     if meta.get("key") == "ride_id":
                         ride_id = meta.get("value")
                         break
                 ride_trip_rows.append({
-                    "Ride ID": ride_id,
-                    "Trip ID": trip_id,
-                    "Event": e.get("type"),
-                    "Driver ID": driver_id
+                    "Ride ID": str(ride_id),
+                    "Trip ID": str(trip_id),
+                    "Event": str(e.get("type")),
+                    "Driver ID": str(driver_id)
                 })
 
         if ride_trip_rows:
             df_ride_trip = pd.DataFrame(ride_trip_rows)
-            df_ride_trip["Driver ID"] = df_ride_trip["Driver ID"].astype(str)
-            df_ride_trip["Ride ID"] = df_ride_trip["Ride ID"].astype(str)
-
-            # Drop duplicates based on only hashable columns
-            df_ride_trip = df_ride_trip.drop_duplicates(subset=["Ride ID", "Trip ID", "Event", "Driver ID"])
-            st.dataframe(df_ride_trip)
+            st.dataframe(df_ride_trip.astype(str))
         else:
             st.info("No ride/trip data available")
 
-        # --- Estimated Trip Details Table ---
+        # --- Estimated Trip Details ---
         st.header("Estimated Trip Details")
         if trip_fare_event:
             fare_list = safe_get(trip_fare_event, "body", "fare_details", default=[])
             estimated_fares = []
-
             for f in fare_list:
                 est = safe_get(f, "estimated_fare", "fare_info", default={})
-
                 fare_info = {
-                    "Currency": f.get("currency_code", ""),
-                    "Total Distance (km)": f.get("distance", ""),
-                    "Total Duration (sec)": f.get("duration", ""),
+                    "Currency": str(f.get("currency_code", "")),
+                    "Total Distance (km)": pd.to_numeric(f.get("distance", 0), errors='coerce'),
+                    "Total Duration (sec)": pd.to_numeric(f.get("duration", 0), errors='coerce'),
                     "Number of Stops": len(drops),
-                    "Base Fare": est.get("min_fare"),
-                    "Distance Fare": safe_get(est, "fare_breakdown", "distance_fare"),
-                    "Duration Fare": safe_get(est, "fare_breakdown", "duration_fare"),
-                    "Waiting Fare": est.get("waiting_fare"),
-                    "Free Waiting Time": est.get("free_waiting_time"),
-                    "Extra Ride Fare": est.get("extra_ride_fare"),
-                    "Above KM Fare": est.get("above_km_fare"),
-                    "Is Upfront": f.get("is_upfront"),
-                    "Ride Hour Enabled": f.get("ride_hour_enabled")
+                    "Base Fare": pd.to_numeric(est.get("min_fare", 0), errors='coerce'),
+                    "Distance Fare": str(safe_get(est, "fare_breakdown", "distance_fare")),
+                    "Duration Fare": str(safe_get(est, "fare_breakdown", "duration_fare")),
+                    "Waiting Fare": str(est.get("waiting_fare")),
+                    "Free Waiting Time": pd.to_numeric(est.get("free_waiting_time", 0), errors='coerce'),
+                    "Extra Ride Fare": pd.to_numeric(est.get("extra_ride_fare", 0), errors='coerce'),
+                    "Above KM Fare": pd.to_numeric(est.get("above_km_fare", 0), errors='coerce'),
+                    "Is Upfront": str(f.get("is_upfront")),
+                    "Ride Hour Enabled": str(f.get("ride_hour_enabled"))
                 }
-
                 estimated_fares.append(fare_info)
-
             if estimated_fares:
                 st.dataframe(pd.DataFrame(estimated_fares))
-
-        # --- Fare Price File Tables ---
-        st.header("Fare Price File")
-        if trip_fare_event:
-            price_file = safe_get(trip_fare_event, "body", "fare_details", 0, "price_file", default={})
-
-            table_columns = {
-                "additional_charge": ["id", "name", "amount", "type"],
-                "distance_fare": ["base_fare", "distance", "km_fare"],
-                "waiting_fare": ["end_time", "fare"]
-            }
-
-            for key in ["additional_charge", "distance_fare", "waiting_fare"]:
-                items = price_file.get(key, [])
-                if items:
-                    st.subheader(key.replace("_", " ").title())
-                    df = pd.DataFrame(items)
-
-                    cols_to_show = [col for col in table_columns[key] if col in df.columns]
-                    df = df[cols_to_show]
-
-                    df = df.rename(columns={
-                        "id": "ID",
-                        "name": "Name",
-                        "amount": "Amount",
-                        "type": "Type",
-                        "base_fare": "Base Fare",
-                        "distance": "Distance",
-                        "km_fare": "KM Fare",
-                        "end_time": "End Time",
-                        "fare": "Fare"
-                    })
-                    st.table(df)
-                else:
-                    st.info(f"No {key.replace('_', ' ')} data available")
-
-        # --- Actual Trip Details ---
-        st.header("Actual Trip Details")
-        if trip_completed_event or trip_ended_event:
-            completed = trip_completed_event["body"] if trip_completed_event else {}
-            ended = trip_ended_event["body"] if trip_ended_event else {}
-
-            meter_details = safe_get(ended, "meter_details", "travel_details", default={})
-            travel_info = safe_get(ended, "travel_info", default={})
-            trip_info = safe_get(completed, "trip", default={})
-
-            actual = {
-                "Driver ID": ended.get("driver_id", trip_info.get("driver_id")),
-                "Passenger ID": trip_info.get("passenger_id"),
-                "Currency": ended.get("currency_code", trip_info.get("currency_code")),
-                "Pickup Address": safe_get(trip_info, "actual_pickup", "address"),
-                "Drop Address": safe_get(trip_info, "actual_drop", "address"),
-                "Distance Travelled (m)": meter_details.get("distance_travelled"),
-                "Waiting Time (sec)": meter_details.get("waiting_time"),
-                "Total Trip Cost": trip_info.get("trip_cost"),
-                "Promotion Code": safe_get(trip_info, "promo_code"),
-                "Tip": trip_info.get("total_tip"),
-                "Payment Method": safe_get(trip_info, "payment", 0, "method"),
-                "Actual Duration (sec)": travel_info.get("actual_duration"),
-                "Estimated Distance": travel_info.get("estimated_distance"),
-                "Lost Mileage": travel_info.get("estimated_lost_mileage")
-            }
-            st.json(actual)
 
         # --- Trip Bidding Details ---
         st.header("Trip Bidding Details")
         bidding_rows = []
-
-        for e in data:
+        for e in events:
             body = e.get("body", {})
             trip_id = body.get("trip_id")
-
             if e["type"] in ["driver_selected", "driver_assigned"]:
                 drivers = body.get("drivers", [])
                 for d in drivers:
                     driver_id = d.get("driver_id")
-                    bidding = d.get("bidding", False)
-                    eta = d.get("eta")
-                    distance = d.get("distance")
-                    selection_type = d.get("selection_type")
-                    assigned = e["type"] == "driver_assigned"
-
                     bidding_rows.append({
-                        "Trip ID": trip_id,
-                        "Driver ID": driver_id,
-                        "Bidding?": bidding,
-                        "Bid Amount": None,
-                        "Assigned?": assigned,
+                        "Trip ID": str(trip_id),
+                        "Driver ID": str(driver_id),
+                        "Bidding?": str(d.get("bidding", False)),
+                        "Bid Amount": pd.to_numeric(None),
+                        "Assigned?": e["type"] == "driver_assigned",
                         "Winner?": False,
-                        "Selection Type": selection_type,
-                        "ETA (s)": eta,
-                        "Distance (m)": distance
+                        "Selection Type": str(d.get("selection_type")),
+                        "ETA (s)": pd.to_numeric(d.get("eta", 0), errors='coerce'),
+                        "Distance (m)": pd.to_numeric(d.get("distance", 0), errors='coerce')
                     })
 
-        # Fill Bid Amount and Winner from trip_accepted
-        for e in data:
+        for e in events:
             if e["type"] == "trip_accepted":
                 body = e.get("body", {})
                 trip_id = body.get("trip_id")
                 driver_id = body.get("driver_id")
                 bid_amount = body.get("bid_amount")
-
                 for row in bidding_rows:
-                    if row["Trip ID"] == trip_id and row["Driver ID"] == driver_id:
-                        row["Bid Amount"] = bid_amount
+                    if row["Trip ID"] == str(trip_id) and row["Driver ID"] == str(driver_id):
+                        row["Bid Amount"] = pd.to_numeric(bid_amount, errors='coerce')
                         row["Winner?"] = True
 
         if bidding_rows:
             df_bidding = pd.DataFrame(bidding_rows)
-            df_bidding = df_bidding.astype(str)
+            st.dataframe(df_bidding)
 
-            # Drop duplicates based on hashable columns
-            df_bidding = df_bidding.drop_duplicates(subset=["Trip ID", "Driver ID", "Assigned?", "Winner?"])
-
-            st.markdown(
-                """
-                <style>
-                .black-font td, .black-font th { color: black !important; }
-                </style>
-                """,
-                unsafe_allow_html=True
-            )
-            st.table(df_bidding.style.set_table_attributes('class="black-font"'))
-        else:
-            st.info("No bidding/driver assignment data available")
-
-        # --- Complete Events Timeline ---
+        # --- Timeline ---
         st.header("Complete Trip Events Timeline")
         timeline_data = []
-
-        for e in data:
-            event_type = e.get("type")
-            created_at = format_timestamp(e.get("created_at"))
+        for e in events:
             body = e.get("body", {})
-
-            if "driver_id" in body or "drivers" in body or "drivers_status" in body:
-                event_category = "Driver Event"
-                driver_id = safe_get(body, "driver_id", default="-")
-            else:
-                event_category = "Trip Event"
-                driver_id = "-"
-
-            distance = safe_get(body, "distance", default="-")
-            eta = safe_get(body, "eta", default="-")
-            location = safe_get(body, "location", "address", default="-")
-
             timeline_data.append({
-                "Timestamp": created_at,
-                "Event Type": event_type,
-                "Category": event_category,
-                "Driver ID": driver_id,
-                "Distance": distance,
-                "ETA": eta,
-                "Location": location,
-                "Extra Info": body
+                "Timestamp": str(format_timestamp(e.get("created_at"))),
+                "Event Type": str(e.get("type")),
+                "Category": "Driver Event" if "driver_id" in body or "drivers" in body else "Trip Event",
+                "Driver ID": str(safe_get(body, "driver_id", default="-")),
+                "Distance": pd.to_numeric(safe_get(body, "distance", default=0), errors='coerce'),
+                "ETA": pd.to_numeric(safe_get(body, "eta", default=0), errors='coerce'),
+                "Location": str(safe_get(body, "location", "address", default="-")),
+                "Extra Info": str(body)
             })
 
         df_timeline = pd.DataFrame(timeline_data)
         if not df_timeline.empty:
             df_timeline.sort_values("Timestamp", inplace=True)
-            df_timeline["Driver ID"] = df_timeline["Driver ID"].astype(str)
+            st.dataframe(df_timeline)
 
-            # Drop duplicates based on hashable columns
-            df_timeline = df_timeline.drop_duplicates(subset=["Timestamp", "Event Type", "Category", "Driver ID"])
-
-            def highlight_category(row):
-                color = '#c6f5c6' if row["Category"] == "Driver Event" else '#f5e0c6'
-                return [f'background-color: {color}; color: black' for _ in row]
-
-            st.dataframe(df_timeline.style.apply(highlight_category, axis=1))
-
-        # --- Map ---
+        # --- Trip Map ---
         st.header("Trip Map")
         route_points = []
         if pickup:
@@ -317,13 +195,15 @@ if uploaded_file:
             route_points.append((d.get("lat"), d.get("lng")))
 
         m = folium.Map(location=[pickup.get("lat", 0), pickup.get("lng", 0)], zoom_start=12)
+
+        # Pickup marker
         folium.Marker(
             location=[pickup.get("lat"), pickup.get("lng")],
             popup=f"Pickup: {pickup.get('address')}",
             icon=folium.Icon(color='green', icon='play')
         ).add_to(m)
 
-        drops = safe_get(trip_created_event, "body", "drop", "location", default=[])
+        # Drop markers
         for i, d in enumerate(drops, start=1):
             lat = d.get("lat")
             lng = d.get("lng")
@@ -332,27 +212,36 @@ if uploaded_file:
                 folium.Marker(
                     location=[lat, lng],
                     popup=f"Drop {i}: {addr}",
-                    icon=folium.DivIcon(
-                        html=f"""
+                    icon=folium.DivIcon(html=f"""
                         <div style="
-                            background-color:red;
-                            color:white;
-                            border-radius:50%;
-                            width:28px;
-                            height:28px;
-                            text-align:center;
-                            line-height:28px;
-                            font-weight:bold;
-                            ">
-                            {i}
-                        </div>
-                        """
-                    )
+                        background-color:red;
+                        color:white;
+                        border-radius:50%;
+                        width:28px;
+                        height:28px;
+                        text-align:center;
+                        line-height:28px;
+                        font-weight:bold;">
+                        {i}
+                        </div>""")
                 ).add_to(m)
 
-        # --- OSRM Route ---
+        # Driver markers
+
+        driver_events = [e for e in events if e["type"] == "trip_accepted"]
+        for idx, event in enumerate(driver_events):
+            loc = event["body"].get("location")
+            if loc and loc.get("lat") and loc.get("lng"):
+                # Use black for previous drivers, lightgreen for final
+                color = "darkblue" if idx == len(driver_events) - 1 else "black"
+                folium.Marker(
+                    location=[loc["lat"], loc["lng"]],
+                    popup=f"Driver {event['body'].get('driver_id')}",
+                    icon=folium.Icon(color=color, icon='car', prefix='fa')
+                ).add_to(m)
+
+        # OSRM route
         try:
-            import requests
             coords = ";".join([f"{lng},{lat}" for lat, lng in route_points])
             osrm_url = f"http://router.project-osrm.org/route/v1/driving/{coords}?overview=full&geometries=geojson"
             r = requests.get(osrm_url).json()
@@ -360,6 +249,29 @@ if uploaded_file:
             folium.PolyLine(route_coords, weight=4, opacity=0.7, tooltip="Planned Route").add_to(m)
         except Exception as e:
             st.warning(f"Could not fetch route from OSRM: {e}")
+
+        # Legend
+        legend_html = """
+        <div style="
+        position: fixed;
+        bottom: 100px;
+        left: 50px;
+        width: 150px;
+        height: 120px;
+        background-color:white;
+        color: black;
+        border:2px solid grey;
+        z-index:9999;
+        font-size:14px;
+        padding:10px;">
+        <b>Legend</b><br>
+        <span style="color:green;">&#9679;</span> Pickup<br>
+        <span style="color:red;">&#9679;</span> Drops<br>
+        <span style="color:black;">&#9679;</span> Driver (previous)<br>
+        <span style="color:yellow;">&#9679;</span> Driver (final)
+        </div>
+        """
+        m.get_root().html.add_child(folium.Element(legend_html))
 
         st_folium(m, width=800, height=500)
 
