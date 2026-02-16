@@ -128,6 +128,69 @@ if uploaded_file:
             if estimated_fares:
                 st.dataframe(pd.DataFrame(estimated_fares))
 
+                # --- Fare Price File Tables ---
+            st.header("Fare Price File")
+            if trip_fare_event:
+                price_file = safe_get(trip_fare_event, "body", "fare_details", 0, "price_file", default={})
+
+                table_columns = {
+                    "additional_charge": ["id", "name", "amount", "type"],
+                    "distance_fare": ["base_fare", "distance", "km_fare"],
+                    "waiting_fare": ["end_time", "fare"]
+                }
+
+                for key in ["additional_charge", "distance_fare", "waiting_fare"]:
+                    items = price_file.get(key, [])
+                    if items:
+                        st.subheader(key.replace("_", " ").title())
+                        df = pd.DataFrame(items)
+
+                        cols_to_show = [col for col in table_columns[key] if col in df.columns]
+                        df = df[cols_to_show]
+
+                        df = df.rename(columns={
+                            "id": "ID",
+                            "name": "Name",
+                            "amount": "Amount",
+                            "type": "Type",
+                            "base_fare": "Base Fare",
+                            "distance": "Distance",
+                            "km_fare": "KM Fare",
+                            "end_time": "End Time",
+                            "fare": "Fare"
+                        })
+                        st.table(df)
+                    else:
+                        st.info(f"No {key.replace('_', ' ')} data available")
+
+            # --- Actual Trip Details ---
+            st.header("Actual Trip Details")
+            if trip_completed_event or trip_ended_event:
+                completed = trip_completed_event["body"] if trip_completed_event else {}
+                ended = trip_ended_event["body"] if trip_ended_event else {}
+
+                meter_details = safe_get(ended, "meter_details", "travel_details", default={})
+                travel_info = safe_get(ended, "travel_info", default={})
+                trip_info = safe_get(completed, "trip", default={})
+
+                actual = {
+                    "Driver ID": ended.get("driver_id", trip_info.get("driver_id")),
+                    "Passenger ID": trip_info.get("passenger_id"),
+                    "Currency": ended.get("currency_code", trip_info.get("currency_code")),
+                    "Pickup Address": safe_get(trip_info, "actual_pickup", "address"),
+                    "Drop Address": safe_get(trip_info, "actual_drop", "address"),
+                    "Distance Travelled (m)": meter_details.get("distance_travelled"),
+                    "Waiting Time (sec)": meter_details.get("waiting_time"),
+                    "Total Trip Cost": trip_info.get("trip_cost"),
+                    "Promotion Code": safe_get(trip_info, "promo_code"),
+                    "Tip": trip_info.get("total_tip"),
+                    "Payment Method": safe_get(trip_info, "payment", 0, "method"),
+                    "Actual Duration (sec)": travel_info.get("actual_duration"),
+                    "Estimated Distance": travel_info.get("estimated_distance"),
+                    "Lost Mileage": travel_info.get("estimated_lost_mileage")
+                }
+                st.json(actual)
+
         # --- Trip Bidding Details ---
         st.header("Trip Bidding Details")
         bidding_rows = []
