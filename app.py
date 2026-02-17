@@ -2,9 +2,10 @@ import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
-from datetime import datetime
+from datetime import datetime,timezone
 import json
 import requests
+from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="Trip Dashboard", layout="wide")
 st.title("PickMe Trip Dashboard")
@@ -28,10 +29,14 @@ def format_timestamp(ts):
     try:
         if ts > 1e12:  # milliseconds
             ts = ts / 1000
-        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-    except:
-        return ts
 
+        utc_time = datetime.fromtimestamp(ts, timezone.utc)
+        sl_time = utc_time.astimezone(ZoneInfo("Asia/Colombo"))
+
+        return sl_time.strftime("%Y-%m-%d %H:%M:%S")
+
+    except Exception:
+        return ts
 # --- User Input ---
 uploaded_file = st.file_uploader("Upload Trip JSON File", type="json")
 if uploaded_file:
@@ -151,13 +156,13 @@ if uploaded_file:
                         df = df.rename(columns={
                             "id": "ID",
                             "name": "Name",
-                            "amount": "Amount",
+                            "amount": "Amount(LKR)",
                             "type": "Type",
-                            "base_fare": "Base Fare",
-                            "distance": "Distance",
-                            "km_fare": "KM Fare",
-                            "end_time": "End Time",
-                            "fare": "Fare"
+                            "base_fare": "Base Fare(LKR)",
+                            "distance": "Distance(km)",
+                            "km_fare": "km Fare",
+                            "end_time": "End Time(s)",
+                            "fare": "Fare(LKR)"
                         })
                         st.table(df)
                     else:
